@@ -3,66 +3,94 @@ name: Build APK from ZIP
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Find ZIP
+      - name: Locate project ZIP
         id: zip
         shell: bash
         run: |
           ZIP=$(find . -maxdepth 2 -name "*.zip" | head -n1)
           if [ -z "$ZIP" ]; then
-            echo "Nenhum ZIP encontrado."
+            echo "Nenhum arquivo ZIP encontrado."
             exit 1
           fi
-          echo "zip=$ZIP" >> $GITHUB_OUTPUT
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
       - name: Extract ZIP
-        run: unzip -q "${{ steps.zip.outputs.zip }}" -d project
-
-      - name: Locate package.json
-        id: detect
         shell: bash
         run: |
-          DIR=$(find project -name package.json | head -n1 | xargs dirname)
-          if [ -z "$DIR" ]; then
-            echo "package.json não encontrado."
+          unzip -q "${{ steps.zip.outputs.zip }}" -d project
+
+      - name: Locate frontend-mobile
+        id: app
+        shell: bash
+        run: |
+          APP=$(find project -type d -name "frontend-mobile" | head -n1)
+          if [ -z "$APP" ]; then
+            echo "Pasta frontend-mobile não encontrada."
             find project -maxdepth 4
             exit 1
           fi
-          echo "dir=$DIR" >> $GITHUB_OUTPUT
+          echo "dir=$APP" >> "$GITHUB_OUTPUT"
+          echo "Projeto localizado em: $APP"
 
-      - name: Install dependencies
-        working-directory: ${{ steps.detect.outputs.dir }}
+      - name: Show project structure
+        shell: bash
+        run: |
+          find "${{ steps.app.outputs.dir }}" -maxdepth 2
+
+      - name: Install root dependencies
+        working-directory: ${{ steps.app.outputs.dir }}/..
         run: npm install
 
-      - name: Generate Android
-        working-directory: ${{ steps.detect.outputs.dir }}
-        run: npx expo prebuild --platform android --non-interactive
+      - name: Install mobile dependencies
+        working-directory: ${{ steps.app.outputs.dir }}
+        run: npm install
+
+      - name: Verify Expo
+        working-directory: ${{ steps.app.outputs.dir }}
+        run: npx expo --version
+
+      - name: Generate Android project
+        working-directory: ${{ steps.app.outputs.dir }}
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform android
 
       - name: Build Release APK
-        working-directory: ${{ steps.detect.outputs.dir }}/android
+        working-directory: ${{ steps.app.outputs.dir }}/android
+        shell: bash
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CleanOS-APK-Release
-          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
+          path: ${{ steps.app.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
